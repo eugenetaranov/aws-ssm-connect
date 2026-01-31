@@ -235,6 +235,49 @@ func (c *Client) UploadFile(ctx context.Context, localPath, instanceID, remotePa
 	return nil
 }
 
+// CommandResult holds the result of a remote command execution.
+type CommandResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// RunCommand runs a command on an instance via SSM SendCommand and prints output.
+func (c *Client) RunCommand(ctx context.Context, instanceID, command string) error {
+	c.out.Debug("Running command on %s: %s", instanceID, command)
+
+	sendResult, err := c.ssm.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {command},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send command: %w", err)
+	}
+
+	commandID := *sendResult.Command.CommandId
+	c.out.Debug("Command ID: %s", commandID)
+
+	result, err := c.waitForCommandResult(ctx, commandID, instanceID)
+	if err != nil {
+		return err
+	}
+
+	if result.Stdout != "" {
+		fmt.Print(result.Stdout)
+	}
+	if result.Stderr != "" {
+		fmt.Fprint(os.Stderr, result.Stderr)
+	}
+
+	if result.ExitCode != 0 {
+		os.Exit(result.ExitCode)
+	}
+	return nil
+}
+
 // DownloadFile downloads a remote file from an instance via SSM SendCommand.
 func (c *Client) DownloadFile(ctx context.Context, instanceID, remotePath, localPath string) error {
 	c.out.Info("Downloading %s:%s to %s", instanceID, remotePath, localPath)
@@ -279,18 +322,26 @@ func (c *Client) DownloadFile(ctx context.Context, instanceID, remotePath, local
 }
 
 func (c *Client) waitForCommand(ctx context.Context, commandID, instanceID string) error {
-	_, err := c.waitForCommandOutput(ctx, commandID, instanceID)
+	_, err := c.waitForCommandResult(ctx, commandID, instanceID)
 	return err
 }
 
 func (c *Client) waitForCommandOutput(ctx context.Context, commandID, instanceID string) (string, error) {
+	result, err := c.waitForCommandResult(ctx, commandID, instanceID)
+	if err != nil {
+		return "", err
+	}
+	return result.Stdout, nil
+}
+
+func (c *Client) waitForCommandResult(ctx context.Context, commandID, instanceID string) (*CommandResult, error) {
 	pollInterval := 500 * time.Millisecond
 	maxInterval := 5 * time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(pollInterval):
 		}
 
@@ -306,20 +357,22 @@ func (c *Client) waitForCommandOutput(ctx context.Context, commandID, instanceID
 		}
 
 		switch result.Status {
-		case ssmtypes.CommandInvocationStatusSuccess:
-			output := ""
+		case ssmtypes.CommandInvocationStatusSuccess,
+			ssmtypes.CommandInvocationStatusFailed:
+			cmdResult := &CommandResult{}
 			if result.StandardOutputContent != nil {
-				output = *result.StandardOutputContent
+				cmdResult.Stdout = *result.StandardOutputContent
 			}
-			return output, nil
-		case ssmtypes.CommandInvocationStatusFailed,
-			ssmtypes.CommandInvocationStatusTimedOut,
+			if result.StandardErrorContent != nil {
+				cmdResult.Stderr = *result.StandardErrorContent
+			}
+			if result.ResponseCode != 0 {
+				cmdResult.ExitCode = int(result.ResponseCode)
+			}
+			return cmdResult, nil
+		case ssmtypes.CommandInvocationStatusTimedOut,
 			ssmtypes.CommandInvocationStatusCancelled:
-			errMsg := ""
-			if result.StandardErrorContent != nil && *result.StandardErrorContent != "" {
-				errMsg = *result.StandardErrorContent
-			}
-			return "", fmt.Errorf("command %s: %s", result.Status, errMsg)
+			return nil, fmt.Errorf("command %s", result.Status)
 		case ssmtypes.CommandInvocationStatusInProgress,
 			ssmtypes.CommandInvocationStatusPending:
 			c.out.Debug("Command status: %s", result.Status)

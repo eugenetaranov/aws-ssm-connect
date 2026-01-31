@@ -29,13 +29,17 @@ var (
 	showVersion bool
 	listFlag    bool
 	copyFlag    bool
+	runFlag     bool
 )
 
 func main() {
-	// Allow -copy as alias for --copy
+	// Allow single-dash long flags
 	for i, arg := range os.Args {
-		if arg == "-copy" {
+		switch arg {
+		case "-copy":
 			os.Args[i] = "--copy"
+		case "-run":
+			os.Args[i] = "--run"
 		}
 	}
 
@@ -65,7 +69,8 @@ Run without arguments for interactive fuzzy selection, or provide
 an instance name/ID to filter and connect directly.
 
 Use -l to list instances: -l [filter words...]
-Use -copy to copy files: -copy src dst (use instance:/path for remote)`,
+Use -copy to copy files: -copy src dst (use instance:/path for remote)
+Use -run to run a command: -run instance "command"`,
 	Args:          cobra.ArbitraryArgs,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -95,6 +100,11 @@ Use -copy to copy files: -copy src dst (use instance:/path for remote)`,
 		// Handle -l flag for listing instances
 		if listFlag {
 			return handleList(ctx, client, args)
+		}
+
+		// Handle -run flag for running a command
+		if runFlag {
+			return handleRun(ctx, client, args)
 		}
 
 		var instanceID, instanceName string
@@ -168,6 +178,25 @@ func matchesAllFilters(inst selector.Instance, filters []string) bool {
 	return true
 }
 
+// handleRun handles the -run flag for running a command on an instance.
+// Format: -run instance "command"
+func handleRun(ctx context.Context, client *ssm.Client, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: aws-ssm-connect -run <instance> <command>")
+	}
+
+	instance := args[0]
+	command := strings.Join(args[1:], " ")
+
+	// Resolve instance ID if name was provided
+	instanceID, err := resolveInstance(ctx, client, instance)
+	if err != nil {
+		return err
+	}
+
+	return client.RunCommand(ctx, instanceID, command)
+}
+
 // handleCopy handles the -copy flag for file copy (upload or download).
 // Format: -copy src dst (use instance:/path for remote)
 func handleCopy(ctx context.Context, client *ssm.Client, args []string) error {
@@ -237,4 +266,5 @@ func init() {
 	rootCmd.Flags().StringVar(&region, "region", "", "AWS region to use")
 	rootCmd.Flags().BoolVar(&copyFlag, "copy", false, "Copy file to instance")
 	rootCmd.Flags().BoolVarP(&listFlag, "list", "l", false, "List instances and exit")
+	rootCmd.Flags().BoolVar(&runFlag, "run", false, "Run a command on instance")
 }
