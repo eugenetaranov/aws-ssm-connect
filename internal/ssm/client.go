@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/e/aws-ssm-connect/internal/output"
+	"github.com/e/aws-ssm-connect/internal/selector"
 )
 
 // Client provides SSM operations.
@@ -34,151 +35,132 @@ func NewClient(cfg aws.Config, out *output.Output) *Client {
 
 // Instance represents an EC2 instance with SSM status.
 type Instance struct {
-	ID         string
-	Name       string
-	State      string
-	PrivateIP  string
-	SSMStatus  string
+	ID           string
+	Name         string
+	State        string
+	PrivateIP    string
+	SSMStatus    string
 	PlatformType string
 }
 
-// ListInstances lists all EC2 instances that can be connected via SSM.
-func (c *Client) ListInstances(ctx context.Context) error {
+// GetRunningInstances returns running instances that can be connected via SSM.
+func (c *Client) GetRunningInstances(ctx context.Context) ([]selector.Instance, error) {
 	instances, err := c.getSSMInstances(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if len(instances) == 0 {
-		c.out.Warning("No SSM-managed instances found")
-		return nil
-	}
-
-	c.out.Header("SSM-Managed Instances")
-	fmt.Printf("%-20s %-30s %-10s %-15s %-10s\n", "INSTANCE ID", "NAME", "STATE", "PRIVATE IP", "PLATFORM")
-	fmt.Println(strings.Repeat("-", 90))
-
+	var running []selector.Instance
 	for _, inst := range instances {
-		fmt.Printf("%-20s %-30s %-10s %-15s %-10s\n",
-			inst.ID,
-			truncate(inst.Name, 30),
-			inst.State,
-			inst.PrivateIP,
-			inst.PlatformType,
-		)
+		if inst.State == "running" {
+			running = append(running, selector.Instance{
+				ID:        inst.ID,
+				Name:      inst.Name,
+				PrivateIP: inst.PrivateIP,
+			})
+		}
 	}
 
-	return nil
+	return running, nil
 }
 
-// SelectInstance prompts the user to select an instance interactively.
+// SelectInstance prompts the user to select an instance using fuzzy finder.
 func (c *Client) SelectInstance(ctx context.Context) (string, error) {
-	instances, err := c.getSSMInstances(ctx)
+	instances, err := c.GetRunningInstances(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	if len(instances) == 0 {
-		return "", fmt.Errorf("no SSM-managed instances found")
+		return "", fmt.Errorf("no running SSM-managed instances found")
 	}
 
-	c.out.Header("Select an instance")
-	for i, inst := range instances {
-		name := inst.Name
-		if name == "" {
-			name = "(no name)"
-		}
-		fmt.Printf("  [%d] %s - %s (%s)\n", i+1, inst.ID, name, inst.PrivateIP)
+	selected, err := selector.SelectInstance(instances)
+	if err != nil {
+		return "", err
 	}
 
-	fmt.Print("\nEnter number: ")
-	var selection int
-	if _, err := fmt.Scanf("%d", &selection); err != nil {
-		return "", fmt.Errorf("invalid selection: %w", err)
+	return selected.ID, nil
+}
+
+// SelectByName finds instances by name and returns the matching instance ID.
+// If multiple instances match, presents fuzzy finder for selection.
+func (c *Client) SelectByName(ctx context.Context, name string) (string, error) {
+	instances, err := c.GetRunningInstances(ctx)
+	if err != nil {
+		return "", err
 	}
 
-	if selection < 1 || selection > len(instances) {
-		return "", fmt.Errorf("selection out of range")
+	if len(instances) == 0 {
+		return "", fmt.Errorf("no running SSM-managed instances found")
 	}
 
-	return instances[selection-1].ID, nil
+	matches := selector.FindByName(instances, name)
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no instances found matching %q", name)
+	}
+
+	if len(matches) == 1 {
+		return matches[0].ID, nil
+	}
+
+	// Multiple matches - let user select
+	selected, err := selector.SelectInstance(matches)
+	if err != nil {
+		return "", err
+	}
+
+	return selected.ID, nil
 }
 
 // StartSession starts an interactive SSM session with the specified instance.
-func (c *Client) StartSession(ctx context.Context, instanceID string) error {
+func (c *Client) StartSession(ctx context.Context, instanceID string, profile string) error {
 	c.out.Info("Starting session with %s...", instanceID)
 	c.out.Debug("Region: %s", c.cfg.Region)
 
-	// Use the AWS CLI session-manager-plugin for interactive sessions
-	args := []string{"ssm", "start-session", "--target", instanceID}
-	if c.cfg.Region != "" {
-		args = append(args, "--region", c.cfg.Region)
+	// Call StartSession API using SDK
+	input := &ssm.StartSessionInput{
+		Target: &instanceID,
 	}
-
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			c.out.Info("Session terminated")
-			return nil
-		}
-		return fmt.Errorf("session failed: %w", err)
-	}
-
-	return nil
-}
-
-// RunCommand executes a command on the specified instance.
-func (c *Client) RunCommand(ctx context.Context, instanceID string, command []string) error {
-	cmdStr := strings.Join(command, " ")
-	c.out.Info("Executing command on %s: %s", instanceID, cmdStr)
-
-	input := &ssm.SendCommandInput{
-		InstanceIds:  []string{instanceID},
-		DocumentName: aws.String("AWS-RunShellScript"),
-		Parameters: map[string][]string{
-			"commands": {cmdStr},
-		},
-	}
-
-	result, err := c.ssm.SendCommand(ctx, input)
+	resp, err := c.ssm.StartSession(ctx, input)
 	if err != nil {
-		return fmt.Errorf("failed to send command: %w", err)
+		return fmt.Errorf("failed to start session: %w", err)
 	}
 
-	commandID := *result.Command.CommandId
-	c.out.Debug("Command ID: %s", commandID)
-
-	// Wait for command completion
-	waiter := ssm.NewCommandExecutedWaiter(c.ssm)
-	_, err = waiter.WaitForOutput(ctx, &ssm.GetCommandInvocationInput{
-		CommandId:  aws.String(commandID),
-		InstanceId: aws.String(instanceID),
-	}, 0)
+	// Find session-manager-plugin
+	pluginPath, err := exec.LookPath("session-manager-plugin")
 	if err != nil {
-		return fmt.Errorf("command execution failed: %w", err)
+		return fmt.Errorf("session-manager-plugin not found (install via: brew install session-manager-plugin): %w", err)
 	}
 
-	// Get command output
-	output, err := c.ssm.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
-		CommandId:  aws.String(commandID),
-		InstanceId: aws.String(instanceID),
-	})
+	// Build session response JSON for the plugin
+	sessionJSON := fmt.Sprintf(`{"SessionId":"%s","StreamUrl":"%s","TokenValue":"%s"}`,
+		*resp.SessionId, *resp.StreamUrl, *resp.TokenValue)
+
+	// Build target JSON
+	targetJSON := fmt.Sprintf(`{"Target":"%s"}`, instanceID)
+
+	// session-manager-plugin <session-json> <region> StartSession <profile> <target-json>
+	args := []string{
+		sessionJSON,
+		c.cfg.Region,
+		"StartSession",
+		profile,
+		targetJSON,
+	}
+
+	// Open fresh /dev/tty for the plugin
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return fmt.Errorf("failed to get command output: %w", err)
+		return fmt.Errorf("failed to open /dev/tty: %w", err)
 	}
+	defer tty.Close()
 
-	if output.StandardOutputContent != nil && *output.StandardOutputContent != "" {
-		fmt.Print(*output.StandardOutputContent)
-	}
-	if output.StandardErrorContent != nil && *output.StandardErrorContent != "" {
-		fmt.Fprint(os.Stderr, *output.StandardErrorContent)
-	}
-
-	return nil
+	cmd := exec.Command(pluginPath, args...)
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	return cmd.Run()
 }
 
 func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
@@ -194,19 +176,23 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 		return nil, nil
 	}
 
-	// Build a set of SSM instance IDs
-	ssmInstances := make(map[string]*ssm.DescribeInstanceInformationOutput)
+	// Collect SSM instance IDs
 	var instanceIDs []string
 	for _, info := range ssmResult.InstanceInformationList {
 		if info.InstanceId != nil {
-			ssmInstances[*info.InstanceId] = ssmResult
 			instanceIDs = append(instanceIDs, *info.InstanceId)
 		}
 	}
 
-	// Get EC2 instance details
+	// Get EC2 instance details (only running instances)
 	ec2Result, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: instanceIDs,
+		Filters: []ec2types.Filter{
+			{
+				Name:   aws.String("instance-state-name"),
+				Values: []string{"running"},
+			},
+		},
 	})
 	if err != nil {
 		c.out.Debug("Failed to get EC2 details: %v", err)
@@ -267,11 +253,4 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 	}
 
 	return instances, nil
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }
