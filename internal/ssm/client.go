@@ -2,14 +2,17 @@ package ssm
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
 	"github.com/e/aws-ssm-connect/internal/history"
 	"github.com/e/aws-ssm-connect/internal/output"
@@ -174,6 +177,149 @@ func (c *Client) StartSession(ctx context.Context, instanceID, instanceName, pro
 	cmd.Stdout = tty
 	cmd.Stderr = tty
 	return cmd.Run()
+}
+
+const maxUploadSize = 100 * 1024 // 100KB limit due to SSM command size constraints
+
+// UploadFile uploads a local file to a remote instance via SSM SendCommand.
+func (c *Client) UploadFile(ctx context.Context, localPath, instanceID, remotePath string) error {
+	// Read and validate local file
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read local file: %w", err)
+	}
+
+	if len(data) > maxUploadSize {
+		return fmt.Errorf("file size %d bytes exceeds maximum allowed size of %d bytes (100KB)", len(data), maxUploadSize)
+	}
+
+	c.out.Info("Uploading %s (%d bytes) to %s:%s", localPath, len(data), instanceID, remotePath)
+
+	// Base64 encode the file content
+	encoded := base64.StdEncoding.EncodeToString(data)
+
+	// Build shell script to decode and write file
+	script := fmt.Sprintf("echo '%s' | base64 -d > '%s'", encoded, remotePath)
+
+	// Send command
+	c.out.Debug("Sending command to instance...")
+	sendResult, err := c.ssm.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {script},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send command: %w", err)
+	}
+
+	commandID := *sendResult.Command.CommandId
+	c.out.Debug("Command ID: %s", commandID)
+
+	// Poll for completion
+	if err := c.waitForCommand(ctx, commandID, instanceID); err != nil {
+		return err
+	}
+
+	c.out.Info("Upload complete")
+	return nil
+}
+
+// DownloadFile downloads a remote file from an instance via SSM SendCommand.
+func (c *Client) DownloadFile(ctx context.Context, instanceID, remotePath, localPath string) error {
+	c.out.Info("Downloading %s:%s to %s", instanceID, remotePath, localPath)
+
+	// Read and base64 encode the remote file
+	script := fmt.Sprintf("base64 '%s'", remotePath)
+
+	c.out.Debug("Sending command to instance...")
+	sendResult, err := c.ssm.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {script},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send command: %w", err)
+	}
+
+	commandID := *sendResult.Command.CommandId
+	c.out.Debug("Command ID: %s", commandID)
+
+	// Poll for completion and get output
+	output, err := c.waitForCommandOutput(ctx, commandID, instanceID)
+	if err != nil {
+		return err
+	}
+
+	// Decode base64 output
+	data, err := base64.StdEncoding.DecodeString(output)
+	if err != nil {
+		return fmt.Errorf("failed to decode file content: %w", err)
+	}
+
+	// Write to local file
+	if err := os.WriteFile(localPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write local file: %w", err)
+	}
+
+	c.out.Info("Download complete (%d bytes)", len(data))
+	return nil
+}
+
+func (c *Client) waitForCommand(ctx context.Context, commandID, instanceID string) error {
+	_, err := c.waitForCommandOutput(ctx, commandID, instanceID)
+	return err
+}
+
+func (c *Client) waitForCommandOutput(ctx context.Context, commandID, instanceID string) (string, error) {
+	pollInterval := 500 * time.Millisecond
+	maxInterval := 5 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		result, err := c.ssm.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
+			CommandId:  aws.String(commandID),
+			InstanceId: aws.String(instanceID),
+		})
+		if err != nil {
+			// InvocationDoesNotExist means command hasn't registered yet
+			c.out.Debug("Waiting for command to register...")
+			pollInterval = min(pollInterval*2, maxInterval)
+			continue
+		}
+
+		switch result.Status {
+		case ssmtypes.CommandInvocationStatusSuccess:
+			output := ""
+			if result.StandardOutputContent != nil {
+				output = *result.StandardOutputContent
+			}
+			return output, nil
+		case ssmtypes.CommandInvocationStatusFailed,
+			ssmtypes.CommandInvocationStatusTimedOut,
+			ssmtypes.CommandInvocationStatusCancelled:
+			errMsg := ""
+			if result.StandardErrorContent != nil && *result.StandardErrorContent != "" {
+				errMsg = *result.StandardErrorContent
+			}
+			return "", fmt.Errorf("command %s: %s", result.Status, errMsg)
+		case ssmtypes.CommandInvocationStatusInProgress,
+			ssmtypes.CommandInvocationStatusPending:
+			c.out.Debug("Command status: %s", result.Status)
+			pollInterval = min(pollInterval*2, maxInterval)
+		default:
+			c.out.Debug("Unknown status: %s", result.Status)
+			pollInterval = min(pollInterval*2, maxInterval)
+		}
+	}
 }
 
 func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
