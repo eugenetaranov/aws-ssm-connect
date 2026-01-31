@@ -176,7 +176,16 @@ func (c *Client) StartSession(ctx context.Context, instanceID, instanceName, pro
 	cmd.Stdin = tty
 	cmd.Stdout = tty
 	cmd.Stderr = tty
-	return cmd.Run()
+	err = cmd.Run()
+
+	// Print instance info on exit
+	if instanceName != "" {
+		fmt.Printf("Disconnected from %s %s\n", instanceName, instanceID)
+	} else {
+		fmt.Printf("Disconnected from %s\n", instanceID)
+	}
+
+	return err
 }
 
 const maxUploadSize = 100 * 1024 // 100KB limit due to SSM command size constraints
