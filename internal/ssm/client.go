@@ -11,6 +11,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	"github.com/e/aws-ssm-connect/internal/history"
 	"github.com/e/aws-ssm-connect/internal/output"
 	"github.com/e/aws-ssm-connect/internal/selector"
 )
@@ -65,58 +66,70 @@ func (c *Client) GetRunningInstances(ctx context.Context) ([]selector.Instance, 
 }
 
 // SelectInstance prompts the user to select an instance using fuzzy finder.
-func (c *Client) SelectInstance(ctx context.Context) (string, error) {
+// Returns instance ID and name.
+func (c *Client) SelectInstance(ctx context.Context) (string, string, error) {
 	instances, err := c.GetRunningInstances(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if len(instances) == 0 {
-		return "", fmt.Errorf("no running SSM-managed instances found")
+		return "", "", fmt.Errorf("no running SSM-managed instances found")
 	}
 
-	selected, err := selector.SelectInstance(instances)
+	// Load history to show recent instances first
+	hist, _ := history.Load()
+
+	selected, err := selector.SelectInstance(instances, hist.RecentIDs()...)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return selected.ID, nil
+	return selected.ID, selected.Name, nil
 }
 
-// SelectByName finds instances by name and returns the matching instance ID.
+// SelectByName finds instances by name and returns the matching instance ID and name.
 // If multiple instances match, presents fuzzy finder for selection.
-func (c *Client) SelectByName(ctx context.Context, name string) (string, error) {
+func (c *Client) SelectByName(ctx context.Context, name string) (string, string, error) {
 	instances, err := c.GetRunningInstances(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if len(instances) == 0 {
-		return "", fmt.Errorf("no running SSM-managed instances found")
+		return "", "", fmt.Errorf("no running SSM-managed instances found")
 	}
 
 	matches := selector.FindByName(instances, name)
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no instances found matching %q", name)
+		return "", "", fmt.Errorf("no instances found matching %q", name)
 	}
 
 	if len(matches) == 1 {
-		return matches[0].ID, nil
+		return matches[0].ID, matches[0].Name, nil
 	}
 
 	// Multiple matches - let user select
-	selected, err := selector.SelectInstance(matches)
+	hist, _ := history.Load()
+	selected, err := selector.SelectInstance(matches, hist.RecentIDs()...)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return selected.ID, nil
+	return selected.ID, selected.Name, nil
 }
 
 // StartSession starts an interactive SSM session with the specified instance.
-func (c *Client) StartSession(ctx context.Context, instanceID string, profile string) error {
+func (c *Client) StartSession(ctx context.Context, instanceID, instanceName, profile string) error {
 	c.out.Info("Starting session with %s...", instanceID)
 	c.out.Debug("Region: %s", c.cfg.Region)
+
+	// Save to history (unless disabled)
+	if os.Getenv("AWS_SSM_CONNECT_HISTORY_DISABLED") == "" {
+		if hist, err := history.Load(); err == nil {
+			_ = hist.Add(instanceID, instanceName)
+		}
+	}
 
 	// Call StartSession API using SDK
 	input := &ssm.StartSessionInput{

@@ -72,22 +72,22 @@ an instance name/ID to filter and connect directly.`,
 
 		client := ssm.NewClient(cfg, out)
 
-		var instanceID string
+		var instanceID, instanceName string
 		if len(args) > 0 {
 			// Name/ID provided - filter and select
-			instanceID, err = client.SelectByName(ctx, args[0])
+			instanceID, instanceName, err = client.SelectByName(ctx, args[0])
 			if err != nil {
 				return err
 			}
 		} else {
 			// No args - interactive fuzzy selection
-			instanceID, err = client.SelectInstance(ctx)
+			instanceID, instanceName, err = client.SelectInstance(ctx)
 			if err != nil {
 				return err
 			}
 		}
 
-		return client.StartSession(ctx, instanceID, profile)
+		return client.StartSession(ctx, instanceID, instanceName, profile)
 	},
 }
 

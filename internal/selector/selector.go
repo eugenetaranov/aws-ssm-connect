@@ -19,9 +19,21 @@ type Instance struct {
 
 // SelectInstance presents an interactive fuzzy finder for instance selection.
 // Supports multi-word AND filtering (space-separated words all must match).
-func SelectInstance(instances []Instance) (Instance, error) {
+// If recentIDs is provided, those instances appear at the top of the list.
+func SelectInstance(instances []Instance, recentIDs ...string) (Instance, error) {
 	if len(instances) == 0 {
 		return Instance{}, fmt.Errorf("no instances available")
+	}
+
+	// Build set of recent IDs for highlighting
+	recentSet := make(map[string]bool)
+	for _, id := range recentIDs {
+		recentSet[id] = true
+	}
+
+	// Sort recent instances to the top
+	if len(recentIDs) > 0 {
+		instances = sortByRecent(instances, recentIDs)
 	}
 
 	// Save original file descriptors BEFORE tcell takes over.
@@ -72,7 +84,7 @@ func SelectInstance(instances []Instance) (Instance, error) {
 			selected = 0
 		}
 
-		drawScreen(screen, filtered, len(instances), query, cursor, selected)
+		drawScreen(screen, filtered, len(instances), query, cursor, selected, recentSet)
 		screen.Show()
 
 		ev := screen.PollEvent()
@@ -130,6 +142,35 @@ func SelectInstance(instances []Instance) (Instance, error) {
 	}
 }
 
+func sortByRecent(instances []Instance, recentIDs []string) []Instance {
+	// Build priority map: lower index = more recent = higher priority
+	priority := make(map[string]int)
+	for i, id := range recentIDs {
+		priority[id] = i + 1 // 1-indexed so 0 means "not recent"
+	}
+
+	// Separate recent and non-recent
+	var recent, other []Instance
+	for _, inst := range instances {
+		if priority[inst.ID] > 0 {
+			recent = append(recent, inst)
+		} else {
+			other = append(other, inst)
+		}
+	}
+
+	// Sort recent by priority (most recent first)
+	for i := 0; i < len(recent)-1; i++ {
+		for j := i + 1; j < len(recent); j++ {
+			if priority[recent[i].ID] > priority[recent[j].ID] {
+				recent[i], recent[j] = recent[j], recent[i]
+			}
+		}
+	}
+
+	return append(recent, other...)
+}
+
 func filterInstances(instances []Instance, query string) []Instance {
 	if query == "" {
 		return instances
@@ -159,13 +200,14 @@ func matchesAllWords(s string, words []string) bool {
 	return true
 }
 
-func drawScreen(screen tcell.Screen, filtered []Instance, total int, query string, cursor, selected int) {
+func drawScreen(screen tcell.Screen, filtered []Instance, total int, query string, cursor, selected int, recentSet map[string]bool) {
 	screen.Clear()
 	w, h := screen.Size()
 
 	promptStyle := tcell.StyleDefault.Foreground(tcell.ColorGreen).Bold(true)
 	inputStyle := tcell.StyleDefault
 	normalStyle := tcell.StyleDefault
+	recentStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
 	selectedStyle := tcell.StyleDefault.Background(tcell.ColorDarkCyan).Foreground(tcell.ColorWhite)
 	dimStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
 	countStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
@@ -203,6 +245,9 @@ func drawScreen(screen tcell.Screen, filtered []Instance, total int, query strin
 		line := fmt.Sprintf("  %s  %-30s  %s", inst.ID, truncate(name, 30), inst.PrivateIP)
 
 		style := normalStyle
+		if recentSet[inst.ID] {
+			style = recentStyle
+		}
 		if startIdx+i == selected {
 			style = selectedStyle
 			line = "> " + line[2:]
