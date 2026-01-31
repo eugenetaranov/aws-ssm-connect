@@ -5,9 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 
 	"github.com/gdamore/tcell/v2"
+	"golang.org/x/sys/unix"
 )
 
 // Instance represents an EC2 instance for selection.
@@ -39,21 +39,21 @@ func SelectInstance(instances []Instance, recentIDs ...string) (Instance, error)
 	// Save original file descriptors BEFORE tcell takes over.
 	// tcell's Fini() closes stdin/stdout/stderr on macOS, so we need to
 	// restore them afterward for subprocess execution to work properly.
-	savedStdin, _ := syscall.Dup(int(os.Stdin.Fd()))
-	savedStdout, _ := syscall.Dup(int(os.Stdout.Fd()))
-	savedStderr, _ := syscall.Dup(int(os.Stderr.Fd()))
+	savedStdin, _ := unix.Dup(int(os.Stdin.Fd()))
+	savedStdout, _ := unix.Dup(int(os.Stdout.Fd()))
+	savedStderr, _ := unix.Dup(int(os.Stderr.Fd()))
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
-		syscall.Close(savedStdin)
-		syscall.Close(savedStdout)
-		syscall.Close(savedStderr)
+		unix.Close(savedStdin)
+		unix.Close(savedStdout)
+		unix.Close(savedStderr)
 		return Instance{}, fmt.Errorf("failed to create screen: %w", err)
 	}
 	if err := screen.Init(); err != nil {
-		syscall.Close(savedStdin)
-		syscall.Close(savedStdout)
-		syscall.Close(savedStderr)
+		unix.Close(savedStdin)
+		unix.Close(savedStdout)
+		unix.Close(savedStderr)
 		return Instance{}, fmt.Errorf("failed to init screen: %w", err)
 	}
 
@@ -61,12 +61,12 @@ func SelectInstance(instances []Instance, recentIDs ...string) (Instance, error)
 	cleanupScreen := func() {
 		screen.Fini()
 		// Restore original file descriptors that tcell's Fini() closed
-		_ = syscall.Dup2(savedStdin, int(os.Stdin.Fd()))
-		_ = syscall.Dup2(savedStdout, int(os.Stdout.Fd()))
-		_ = syscall.Dup2(savedStderr, int(os.Stderr.Fd()))
-		_ = syscall.Close(savedStdin)
-		_ = syscall.Close(savedStdout)
-		_ = syscall.Close(savedStderr)
+		_ = unix.Dup2(savedStdin, int(os.Stdin.Fd()))
+		_ = unix.Dup2(savedStdout, int(os.Stdout.Fd()))
+		_ = unix.Dup2(savedStderr, int(os.Stderr.Fd()))
+		_ = unix.Close(savedStdin)
+		_ = unix.Close(savedStdout)
+		_ = unix.Close(savedStderr)
 		// Reset terminal to sane state after restoring FDs
 		_ = exec.Command("stty", "sane").Run()
 	}
