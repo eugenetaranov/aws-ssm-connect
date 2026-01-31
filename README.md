@@ -5,11 +5,18 @@ CLI tool for connecting to AWS EC2 instances via SSM Session Manager with fuzzy 
 ## Installation
 
 ```bash
-# From source
-make build
-sudo make install
+# Homebrew
+brew install eugenetaranov/tap/aws-ssm-connect
 
-# Requires AWS Session Manager Plugin
+# Script
+curl -fsSL https://raw.githubusercontent.com/eugenetaranov/aws-ssm-connect/main/install.sh | bash
+
+# From source
+make build && sudo make install
+```
+
+Requires [session-manager-plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html):
+```bash
 brew install session-manager-plugin
 ```
 
@@ -41,8 +48,7 @@ aws-ssm-connect -d  # debug mode
 ## Requirements
 
 - AWS credentials configured
-- [session-manager-plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
-- EC2 instances with SSM Agent
+- EC2 instances with SSM Agent installed
 
 ## License
 
