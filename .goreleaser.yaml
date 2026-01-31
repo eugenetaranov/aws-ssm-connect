@@ -111,9 +111,9 @@ brews:
       name: goreleaserbot
       email: bot@goreleaser.com
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    dependencies:
-      - name: session-manager-plugin
-        type: recommended
+    caveats: |
+      This tool requires the AWS Session Manager Plugin.
+      Install it with: brew install --cask session-manager-plugin
     test: |
       system "#{bin}/aws-ssm-connect", "--version"
     install: |
