@@ -1,0 +1,8 @@
+bin/
+coverage.out
+coverage.html
+*.exe
+*.dll
+*.so
+*.dylib
+.DS_Store
