@@ -259,7 +259,7 @@ func parseRemotePath(s string) (instance, path string) {
 
 // resolveInstance resolves instance name to ID.
 func resolveInstance(ctx context.Context, client *ssm.Client, instance string) (string, error) {
-	if strings.HasPrefix(instance, "i-") {
+	if strings.HasPrefix(instance, "i-") || strings.HasPrefix(instance, "mi-") {
 		return instance, nil
 	}
 	id, _, err := client.SelectByName(ctx, instance)
