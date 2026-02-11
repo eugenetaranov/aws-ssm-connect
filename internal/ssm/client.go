@@ -44,6 +44,7 @@ type Instance struct {
 	Name         string
 	State        string
 	PrivateIP    string
+	PublicIP     string
 	SSMStatus    string
 	PlatformType string
 }
@@ -62,6 +63,7 @@ func (c *Client) GetRunningInstances(ctx context.Context) ([]selector.Instance, 
 				ID:        inst.ID,
 				Name:      inst.Name,
 				PrivateIP: inst.PrivateIP,
+				PublicIP:  inst.PublicIP,
 			})
 		}
 	}
@@ -464,6 +466,10 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			if inst.PrivateIpAddress != nil {
 				privateIP = *inst.PrivateIpAddress
 			}
+			publicIP := ""
+			if inst.PublicIpAddress != nil {
+				publicIP = *inst.PublicIpAddress
+			}
 			state := ""
 			if inst.State != nil && inst.State.Name != "" {
 				state = string(inst.State.Name)
@@ -473,6 +479,7 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 				Name:      name,
 				State:     state,
 				PrivateIP: privateIP,
+				PublicIP:  publicIP,
 			}
 		}
 	}
@@ -492,6 +499,7 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			inst.Name = details.Name
 			inst.State = details.State
 			inst.PrivateIP = details.PrivateIP
+			inst.PublicIP = details.PublicIP
 		} else if !strings.HasPrefix(*info.InstanceId, "i-") && info.PingStatus == "Online" {
 			// Non-EC2 managed node (e.g. hybrid mi-*) — treat as running if online
 			inst.State = "running"

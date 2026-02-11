@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -157,19 +158,25 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 		return nil
 	}
 
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, inst := range instances {
-		if inst.Name != "" {
-			fmt.Printf("%s\t%s\t%s\n", inst.ID, inst.Name, inst.PrivateIP)
-		} else {
-			fmt.Printf("%s\t%s\n", inst.ID, inst.PrivateIP)
+		name := inst.Name
+		if name == "" {
+			name = "-"
 		}
+		publicIP := inst.PublicIP
+		if publicIP == "" {
+			publicIP = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", inst.ID, name, inst.PrivateIP, publicIP)
 	}
+	w.Flush()
 	return nil
 }
 
 // matchesAllFilters checks if instance matches all filter words (case-insensitive).
 func matchesAllFilters(inst selector.Instance, filters []string) bool {
-	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.PrivateIP)
+	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.PrivateIP + " " + inst.PublicIP)
 	for _, f := range filters {
 		if !strings.Contains(searchText, strings.ToLower(f)) {
 			return false

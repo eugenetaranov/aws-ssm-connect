@@ -15,6 +15,7 @@ type Instance struct {
 	ID        string
 	Name      string
 	PrivateIP string
+	PublicIP  string
 }
 
 // SelectInstance presents an interactive fuzzy finder for instance selection.
@@ -183,7 +184,7 @@ func filterInstances(instances []Instance, query string) []Instance {
 
 	var filtered []Instance
 	for _, inst := range instances {
-		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s", inst.ID, inst.Name, inst.PrivateIP))
+		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s", inst.ID, inst.Name, inst.PrivateIP, inst.PublicIP))
 		if matchesAllWords(searchStr, words) {
 			filtered = append(filtered, inst)
 		}
@@ -242,7 +243,11 @@ func drawScreen(screen tcell.Screen, filtered []Instance, total int, query strin
 		if name == "" {
 			name = "(no name)"
 		}
-		line := fmt.Sprintf("  %s  %-30s  %s", inst.ID, truncate(name, 30), inst.PrivateIP)
+		ipInfo := inst.PrivateIP
+		if inst.PublicIP != "" {
+			ipInfo += "  " + inst.PublicIP
+		}
+		line := fmt.Sprintf("  %s  %-30s  %s", inst.ID, truncate(name, 30), ipInfo)
 
 		style := normalStyle
 		if recentSet[inst.ID] {
