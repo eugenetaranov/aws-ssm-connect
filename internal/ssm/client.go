@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -408,37 +409,39 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 		return nil, nil
 	}
 
-	// Collect SSM instance IDs
+	// Collect EC2 instance IDs (skip managed nodes like mi-*)
 	var instanceIDs []string
 	for _, info := range allSSMInstances {
-		if info.InstanceId != nil {
+		if info.InstanceId != nil && strings.HasPrefix(*info.InstanceId, "i-") {
 			instanceIDs = append(instanceIDs, *info.InstanceId)
 		}
 	}
 
 	// Get EC2 instance details (only running instances, paginated)
 	var allReservations []ec2types.Reservation
-	var ec2NextToken *string
-	for {
-		ec2Result, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			InstanceIds: instanceIDs,
-			Filters: []ec2types.Filter{
-				{
-					Name:   aws.String("instance-state-name"),
-					Values: []string{"running"},
+	if len(instanceIDs) > 0 {
+		var ec2NextToken *string
+		for {
+			ec2Result, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				InstanceIds: instanceIDs,
+				Filters: []ec2types.Filter{
+					{
+						Name:   aws.String("instance-state-name"),
+						Values: []string{"running"},
+					},
 				},
-			},
-			NextToken: ec2NextToken,
-		})
-		if err != nil {
-			c.out.Debug("Failed to get EC2 details: %v", err)
-			break
+				NextToken: ec2NextToken,
+			})
+			if err != nil {
+				c.out.Debug("Failed to get EC2 details: %v", err)
+				break
+			}
+			allReservations = append(allReservations, ec2Result.Reservations...)
+			if ec2Result.NextToken == nil {
+				break
+			}
+			ec2NextToken = ec2Result.NextToken
 		}
-		allReservations = append(allReservations, ec2Result.Reservations...)
-		if ec2Result.NextToken == nil {
-			break
-		}
-		ec2NextToken = ec2Result.NextToken
 	}
 
 	// Build instance list with EC2 details
@@ -489,6 +492,15 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			inst.Name = details.Name
 			inst.State = details.State
 			inst.PrivateIP = details.PrivateIP
+		} else if !strings.HasPrefix(*info.InstanceId, "i-") && info.PingStatus == "Online" {
+			// Non-EC2 managed node (e.g. hybrid mi-*) — treat as running if online
+			inst.State = "running"
+			if info.IPAddress != nil {
+				inst.PrivateIP = *info.IPAddress
+			}
+			if info.Name != nil {
+				inst.Name = *info.Name
+			}
 		}
 		instances = append(instances, inst)
 	}
