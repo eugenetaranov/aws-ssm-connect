@@ -387,74 +387,94 @@ func (c *Client) waitForCommandResult(ctx context.Context, commandID, instanceID
 func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 	c.out.Debug("Fetching SSM-managed instances...")
 
-	// Get SSM managed instances
-	ssmResult, err := c.ssm.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe SSM instances: %w", err)
+	// Get SSM managed instances (paginated)
+	var allSSMInstances []ssmtypes.InstanceInformation
+	var nextToken *string
+	for {
+		ssmResult, err := c.ssm.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe SSM instances: %w", err)
+		}
+		allSSMInstances = append(allSSMInstances, ssmResult.InstanceInformationList...)
+		if ssmResult.NextToken == nil {
+			break
+		}
+		nextToken = ssmResult.NextToken
 	}
 
-	if len(ssmResult.InstanceInformationList) == 0 {
+	if len(allSSMInstances) == 0 {
 		return nil, nil
 	}
 
 	// Collect SSM instance IDs
 	var instanceIDs []string
-	for _, info := range ssmResult.InstanceInformationList {
+	for _, info := range allSSMInstances {
 		if info.InstanceId != nil {
 			instanceIDs = append(instanceIDs, *info.InstanceId)
 		}
 	}
 
-	// Get EC2 instance details (only running instances)
-	ec2Result, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: instanceIDs,
-		Filters: []ec2types.Filter{
-			{
-				Name:   aws.String("instance-state-name"),
-				Values: []string{"running"},
+	// Get EC2 instance details (only running instances, paginated)
+	var allReservations []ec2types.Reservation
+	var ec2NextToken *string
+	for {
+		ec2Result, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: instanceIDs,
+			Filters: []ec2types.Filter{
+				{
+					Name:   aws.String("instance-state-name"),
+					Values: []string{"running"},
+				},
 			},
-		},
-	})
-	if err != nil {
-		c.out.Debug("Failed to get EC2 details: %v", err)
+			NextToken: ec2NextToken,
+		})
+		if err != nil {
+			c.out.Debug("Failed to get EC2 details: %v", err)
+			break
+		}
+		allReservations = append(allReservations, ec2Result.Reservations...)
+		if ec2Result.NextToken == nil {
+			break
+		}
+		ec2NextToken = ec2Result.NextToken
 	}
 
 	// Build instance list with EC2 details
-	instances := make([]Instance, 0, len(ssmResult.InstanceInformationList))
+	instances := make([]Instance, 0, len(allSSMInstances))
 	ec2Details := make(map[string]*Instance)
 
-	if ec2Result != nil {
-		for _, res := range ec2Result.Reservations {
-			for _, inst := range res.Instances {
-				if inst.InstanceId == nil {
-					continue
+	for _, res := range allReservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId == nil {
+				continue
+			}
+			name := ""
+			for _, tag := range inst.Tags {
+				if tag.Key != nil && *tag.Key == "Name" && tag.Value != nil {
+					name = *tag.Value
+					break
 				}
-				name := ""
-				for _, tag := range inst.Tags {
-					if tag.Key != nil && *tag.Key == "Name" && tag.Value != nil {
-						name = *tag.Value
-						break
-					}
-				}
-				privateIP := ""
-				if inst.PrivateIpAddress != nil {
-					privateIP = *inst.PrivateIpAddress
-				}
-				state := ""
-				if inst.State != nil && inst.State.Name != "" {
-					state = string(inst.State.Name)
-				}
-				ec2Details[*inst.InstanceId] = &Instance{
-					ID:        *inst.InstanceId,
-					Name:      name,
-					State:     state,
-					PrivateIP: privateIP,
-				}
+			}
+			privateIP := ""
+			if inst.PrivateIpAddress != nil {
+				privateIP = *inst.PrivateIpAddress
+			}
+			state := ""
+			if inst.State != nil && inst.State.Name != "" {
+				state = string(inst.State.Name)
+			}
+			ec2Details[*inst.InstanceId] = &Instance{
+				ID:        *inst.InstanceId,
+				Name:      name,
+				State:     state,
+				PrivateIP: privateIP,
 			}
 		}
 	}
 
-	for _, info := range ssmResult.InstanceInformationList {
+	for _, info := range allSSMInstances {
 		if info.InstanceId == nil {
 			continue
 		}
