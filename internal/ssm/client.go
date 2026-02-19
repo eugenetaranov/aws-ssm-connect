@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -44,6 +45,7 @@ func NewClient(cfg aws.Config, out *output.Output) *Client {
 type Instance struct {
 	ID           string
 	Name         string
+	Tags         string
 	State        string
 	PrivateIP    string
 	PublicIP     string
@@ -65,6 +67,7 @@ func (c *Client) GetRunningInstances(ctx context.Context) ([]selector.Instance, 
 			running = append(running, selector.Instance{
 				ID:         inst.ID,
 				Name:       inst.Name,
+				Tags:       inst.Tags,
 				PrivateIP:  inst.PrivateIP,
 				PublicIP:   inst.PublicIP,
 				LaunchTime: inst.LaunchTime,
@@ -498,12 +501,26 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 				continue
 			}
 			name := ""
+			var tagPairs []string
 			for _, tag := range inst.Tags {
-				if tag.Key != nil && *tag.Key == "Name" && tag.Value != nil {
-					name = *tag.Value
-					break
+				if tag.Key == nil || tag.Value == nil {
+					continue
 				}
+				if *tag.Key == "Name" {
+					name = *tag.Value
+				}
+				tagPairs = append(tagPairs, *tag.Key+": "+*tag.Value)
 			}
+			// Sort tags: Name first, rest alphabetically
+			sort.Slice(tagPairs, func(i, j int) bool {
+				iIsName := strings.HasPrefix(tagPairs[i], "Name: ")
+				jIsName := strings.HasPrefix(tagPairs[j], "Name: ")
+				if iIsName != jIsName {
+					return iIsName
+				}
+				return tagPairs[i] < tagPairs[j]
+			})
+			tagsStr := strings.Join(tagPairs, ", ")
 			privateIP := ""
 			if inst.PrivateIpAddress != nil {
 				privateIP = *inst.PrivateIpAddress
@@ -523,6 +540,7 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			ec2Details[*inst.InstanceId] = &Instance{
 				ID:         *inst.InstanceId,
 				Name:       name,
+				Tags:       tagsStr,
 				State:      state,
 				PrivateIP:  privateIP,
 				PublicIP:   publicIP,
@@ -544,6 +562,7 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 		}
 		if details, ok := ec2Details[*info.InstanceId]; ok {
 			inst.Name = details.Name
+			inst.Tags = details.Tags
 			inst.State = details.State
 			inst.PrivateIP = details.PrivateIP
 			inst.PublicIP = details.PublicIP

@@ -14,6 +14,7 @@ import (
 type Instance struct {
 	ID         string
 	Name       string
+	Tags       string
 	PrivateIP  string
 	PublicIP   string
 	LaunchTime string
@@ -185,7 +186,7 @@ func filterInstances(instances []Instance, query string) []Instance {
 
 	var filtered []Instance
 	for _, inst := range instances {
-		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s %s", inst.ID, inst.Name, inst.PrivateIP, inst.PublicIP, inst.LaunchTime))
+		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s %s %s", inst.ID, inst.Name, inst.Tags, inst.PrivateIP, inst.PublicIP, inst.LaunchTime))
 		if matchesAllWords(searchStr, words) {
 			filtered = append(filtered, inst)
 		}
@@ -240,9 +241,9 @@ func drawScreen(screen tcell.Screen, filtered []Instance, total int, query strin
 		inst := filtered[startIdx+i]
 		y := i + 2
 
-		name := inst.Name
-		if name == "" {
-			name = "(no name)"
+		tags := inst.Tags
+		if tags == "" {
+			tags = "(no name)"
 		}
 		ipInfo := inst.PrivateIP
 		if inst.PublicIP != "" {
@@ -252,7 +253,7 @@ func drawScreen(screen tcell.Screen, filtered []Instance, total int, query strin
 		if launchTime == "" {
 			launchTime = "-"
 		}
-		line := fmt.Sprintf("  %s  %-30s  %-15s  %s", inst.ID, truncate(name, 30), ipInfo, launchTime)
+		line := fmt.Sprintf("  %s  %-30s  %-15s  %s", inst.ID, truncate(tags, 30), ipInfo, launchTime)
 
 		style := normalStyle
 		if recentSet[inst.ID] {

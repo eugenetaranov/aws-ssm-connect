@@ -150,9 +150,12 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, inst := range instances {
-		name := inst.Name
-		if name == "" {
-			name = "-"
+		tags := inst.Tags
+		if tags == "" {
+			tags = "-"
+		}
+		if len(tags) > 100 {
+			tags = tags[:97] + "..."
 		}
 		publicIP := inst.PublicIP
 		if publicIP == "" {
@@ -162,7 +165,7 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 		if launchTime == "" {
 			launchTime = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", inst.ID, name, inst.PrivateIP, publicIP, launchTime)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", inst.ID, tags, inst.PrivateIP, publicIP, launchTime)
 	}
 	w.Flush()
 	return nil
@@ -170,7 +173,7 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 
 // matchesAllFilters checks if instance matches all filter words (case-insensitive).
 func matchesAllFilters(inst selector.Instance, filters []string) bool {
-	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.PrivateIP + " " + inst.PublicIP + " " + inst.LaunchTime)
+	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.Tags + " " + inst.PrivateIP + " " + inst.PublicIP + " " + inst.LaunchTime)
 	for _, f := range filters {
 		if !strings.Contains(searchText, strings.ToLower(f)) {
 			return false
