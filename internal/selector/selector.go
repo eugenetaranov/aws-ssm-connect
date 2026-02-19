@@ -12,10 +12,11 @@ import (
 
 // Instance represents an EC2 instance for selection.
 type Instance struct {
-	ID        string
-	Name      string
-	PrivateIP string
-	PublicIP  string
+	ID         string
+	Name       string
+	PrivateIP  string
+	PublicIP   string
+	LaunchTime string
 }
 
 // SelectInstance presents an interactive fuzzy finder for instance selection.
@@ -184,7 +185,7 @@ func filterInstances(instances []Instance, query string) []Instance {
 
 	var filtered []Instance
 	for _, inst := range instances {
-		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s", inst.ID, inst.Name, inst.PrivateIP, inst.PublicIP))
+		searchStr := strings.ToLower(fmt.Sprintf("%s %s %s %s %s", inst.ID, inst.Name, inst.PrivateIP, inst.PublicIP, inst.LaunchTime))
 		if matchesAllWords(searchStr, words) {
 			filtered = append(filtered, inst)
 		}
@@ -247,7 +248,11 @@ func drawScreen(screen tcell.Screen, filtered []Instance, total int, query strin
 		if inst.PublicIP != "" {
 			ipInfo += "  " + inst.PublicIP
 		}
-		line := fmt.Sprintf("  %s  %-30s  %s", inst.ID, truncate(name, 30), ipInfo)
+		launchTime := inst.LaunchTime
+		if launchTime == "" {
+			launchTime = "-"
+		}
+		line := fmt.Sprintf("  %s  %-30s  %-15s  %s", inst.ID, truncate(name, 30), ipInfo, launchTime)
 
 		style := normalStyle
 		if recentSet[inst.ID] {

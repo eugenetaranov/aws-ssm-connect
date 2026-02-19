@@ -168,7 +168,11 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 		if publicIP == "" {
 			publicIP = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", inst.ID, name, inst.PrivateIP, publicIP)
+		launchTime := inst.LaunchTime
+		if launchTime == "" {
+			launchTime = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", inst.ID, name, inst.PrivateIP, publicIP, launchTime)
 	}
 	w.Flush()
 	return nil
@@ -176,7 +180,7 @@ func handleList(ctx context.Context, client *ssm.Client, filters []string) error
 
 // matchesAllFilters checks if instance matches all filter words (case-insensitive).
 func matchesAllFilters(inst selector.Instance, filters []string) bool {
-	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.PrivateIP + " " + inst.PublicIP)
+	searchText := strings.ToLower(inst.ID + " " + inst.Name + " " + inst.PrivateIP + " " + inst.PublicIP + " " + inst.LaunchTime)
 	for _, f := range filters {
 		if !strings.Contains(searchText, strings.ToLower(f)) {
 			return false

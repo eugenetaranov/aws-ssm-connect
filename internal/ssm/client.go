@@ -47,6 +47,7 @@ type Instance struct {
 	PublicIP     string
 	SSMStatus    string
 	PlatformType string
+	LaunchTime   string
 }
 
 // GetRunningInstances returns running instances that can be connected via SSM.
@@ -60,10 +61,11 @@ func (c *Client) GetRunningInstances(ctx context.Context) ([]selector.Instance, 
 	for _, inst := range instances {
 		if inst.State == "running" {
 			running = append(running, selector.Instance{
-				ID:        inst.ID,
-				Name:      inst.Name,
-				PrivateIP: inst.PrivateIP,
-				PublicIP:  inst.PublicIP,
+				ID:         inst.ID,
+				Name:       inst.Name,
+				PrivateIP:  inst.PrivateIP,
+				PublicIP:   inst.PublicIP,
+				LaunchTime: inst.LaunchTime,
 			})
 		}
 	}
@@ -474,12 +476,17 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			if inst.State != nil && inst.State.Name != "" {
 				state = string(inst.State.Name)
 			}
+			launchTime := ""
+			if inst.LaunchTime != nil {
+				launchTime = inst.LaunchTime.Format("2006-01-02")
+			}
 			ec2Details[*inst.InstanceId] = &Instance{
-				ID:        *inst.InstanceId,
-				Name:      name,
-				State:     state,
-				PrivateIP: privateIP,
-				PublicIP:  publicIP,
+				ID:         *inst.InstanceId,
+				Name:       name,
+				State:      state,
+				PrivateIP:  privateIP,
+				PublicIP:   publicIP,
+				LaunchTime: launchTime,
 			}
 		}
 	}
@@ -500,6 +507,7 @@ func (c *Client) getSSMInstances(ctx context.Context) ([]Instance, error) {
 			inst.State = details.State
 			inst.PrivateIP = details.PrivateIP
 			inst.PublicIP = details.PublicIP
+			inst.LaunchTime = details.LaunchTime
 		} else if !strings.HasPrefix(*info.InstanceId, "i-") && info.PingStatus == "Online" {
 			// Non-EC2 managed node (e.g. hybrid mi-*) — treat as running if online
 			inst.State = "running"
