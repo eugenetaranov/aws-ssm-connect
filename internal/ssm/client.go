@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -181,7 +183,45 @@ func (c *Client) StartSession(ctx context.Context, instanceID, instanceName, pro
 	cmd.Stdin = tty
 	cmd.Stdout = tty
 	cmd.Stderr = tty
-	err = cmd.Run()
+
+	if err = cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start session-manager-plugin: %w", err)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	killPlugin := func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-waitCh:
+		case <-time.After(3 * time.Second):
+			_ = cmd.Process.Kill()
+			<-waitCh
+		}
+	}
+
+	firstSignal := false
+	for {
+		select {
+		case err = <-waitCh:
+			goto done
+		case <-sigCh:
+			if firstSignal {
+				killPlugin()
+				goto done
+			}
+			firstSignal = true
+		case <-ctx.Done():
+			killPlugin()
+			goto done
+		}
+	}
+done:
 
 	// Print instance info on exit
 	if instanceName != "" {
