@@ -208,17 +208,17 @@ func (c *Client) StartSession(ctx context.Context, instanceID, instanceName, pro
 		}
 	}
 
-	firstSignal := false
 	for {
 		select {
 		case err = <-waitCh:
 			goto done
-		case <-sigCh:
-			if firstSignal {
+		case sig := <-sigCh:
+			if sig == syscall.SIGINT {
+				_ = cmd.Process.Signal(syscall.SIGINT)
+			} else {
 				killPlugin()
 				goto done
 			}
-			firstSignal = true
 		case <-ctx.Done():
 			killPlugin()
 			goto done
